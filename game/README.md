@@ -31,11 +31,19 @@ open build-web/batak_type.html
 
 This makes a single self-contained `batak_type.html` (about 380 KB) that runs in any modern browser, straight from disk. See the main README for details.
 
+## Modes
+
+- **Casual:** 60-second round using your settings. Ends early after 3 wrong presses on one letter, or 5 seconds on one letter. Headline: average reaction time.
+- **Competitive:** starts at frequency 5 and keeps speeding up (after 5, 12, 22, 36, 55... s) to your monitor's top level. Letters always flash, focus on missed letters is off, and one wrong key or 5 seconds on a letter ends the run. Headline: how many letters you got right.
+
+Both show throughput in bits per second (see [Docs/MATHS.md](../Docs/MATHS.md)).
+
 ## How to play
+
+Click **Casual** or **Competitive** on the menu to start, and **Play again** on the results screen to go again.
 
 | Key | Does |
 |---|---|
-| `SPACE` / `ENTER` | Start a round (menu or results screen) |
 | `A`-`Z` | Hit the letter on screen |
 | `ESC` | Close settings, or quit the round back to the menu |
 | Gear (top right) | Settings. Pauses the round while it's open |
@@ -48,13 +56,13 @@ This makes a single self-contained `batak_type.html` (about 380 KB) that runs in
 
 ### Difficulty presets
 
-The Easy / Medium / Hard buttons set everything except round length. The button for the current preset is filled in. If you move a slider yourself, none is filled in. The game starts on Medium.
+The Easy / Medium / Hard buttons set everything except round length. The button for the current preset is filled in. If you move a slider yourself, none is filled in. The game starts on Easy.
 
 | | Random positions after | Letter frequency | Focus on missed letters | Flash letter |
 |---|---|---|---|---|
-| Easy | Never | 2 / 10 | 40% | off |
-| Medium | 10 keys | 5 / 10 | 60% | off |
-| Hard | 0 keys (from the start) | 8 / 10 | 80% | on |
+| Easy | 10 keys | 5 | 60% | off |
+| Medium | 5 keys | 6 | 70% | on |
+| Hard | 0 keys (from the start) | 8 | 80% | on |
 
 ### Sliders
 
@@ -62,7 +70,7 @@ The Easy / Medium / Hard buttons set everything except round length. The button 
 |---|---|
 | Round length | How long a round lasts (10-180 s, default 60) |
 | Random positions after | When letters start appearing in random places. 0 = from the start, far right = Never |
-| Letter frequency | How quickly the next letter comes, and how briefly it flashes. From 8 up, the next letter comes straight away; each step below 8 adds about 0.15 s. With Flash letter on, 8 shows the letter for 0.125 s, each step up halves that, and 10 shows it for a single screen refresh |
+| Letter frequency | How quickly the next letter comes, and how briefly it flashes. From 8 up, the next letter comes straight away; each step below 8 adds about 0.15 s. With Flash letter on, 8 shows the letter for 0.12 s and each step up shows it for 25% less, until it is a single refresh of your monitor (level 15 at 60 Hz, 18 at 120 Hz) |
 | Focus on missed letters | How hard the game leans on letters you get wrong (0 = pure random) |
 | Flash letter | When ticked, the letter disappears after a moment (how long depends on Letter frequency). The timer stays until you press the key |
 
@@ -71,7 +79,8 @@ The Easy / Medium / Hard buttons set everything except round length. The button 
 ```
 game/
   core.h / core.c        game rules: letter weighting, picking, round stats (no raylib)
-  main.c                 window, input, drawing, settings panel, browser support
+  ui.h / ui.c            sharp text, buttons, mouse, monitor refresh rate
+  main.c                 the game: settings, rounds, screens, input
   font_data.h            embedded font for browsers / machines without Arial
   fonts/OFL.txt          that font's licence
   web/shell.html         the page the browser version runs in
