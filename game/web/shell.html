@@ -13,7 +13,19 @@
 <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
 <script>
   var Module = { canvas: document.getElementById('canvas') };
-  window.addEventListener('load', function () { Module.canvas.focus(); });
+  var canvas = Module.canvas;
+  /* Opened on its own: take the keyboard straight away. Embedded in another
+     page (an iframe): wait for a click, so the host page doesn't jump. */
+  if (window.self === window.top) {
+    window.addEventListener('load', function () { canvas.focus({ preventScroll: true }); });
+  }
+  window.addEventListener('mousedown', function () { canvas.focus({ preventScroll: true }); });
+  /* Space and arrow keys shouldn't scroll the page around the game. */
+  window.addEventListener('keydown', function (e) {
+    if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown'].indexOf(e.key) > -1) {
+      e.preventDefault();
+    }
+  });
 </script>
 {{{ SCRIPT }}}
 </body>
