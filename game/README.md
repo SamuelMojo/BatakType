@@ -20,6 +20,17 @@ Run the rule tests (no window needed):
 ctest --test-dir build
 ```
 
+### In a browser
+
+```sh
+brew install emscripten
+emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=MinSizeRel
+cmake --build build-web
+open build-web/batak_type.html
+```
+
+This makes a single self-contained `batak_type.html` (about 380 KB) that runs in any modern browser, straight from disk. See the main README for details and GitHub Pages hosting.
+
 ## How to play
 
 | Key | Does |
@@ -41,9 +52,9 @@ The Easy / Medium / Hard buttons set everything except round length. The button 
 
 | | Random positions after | Letter frequency | Focus on missed letters | Flash letter |
 |---|---|---|---|---|
-| Easy | Never | 5 / 10 | 40% | off |
-| Medium | 10 keys | 7 / 10 | 60% | off |
-| Hard | 0 keys (from the start) | 10 / 10 | 80% | on |
+| Easy | Never | 2 / 10 | 40% | off |
+| Medium | 10 keys | 5 / 10 | 60% | off |
+| Hard | 0 keys (from the start) | 8 / 10 | 80% | on |
 
 ### Sliders
 
@@ -51,16 +62,19 @@ The Easy / Medium / Hard buttons set everything except round length. The button 
 |---|---|
 | Round length | How long a round lasts (10-180 s, default 60) |
 | Random positions after | When letters start appearing in random places. 0 = from the start, far right = Never |
-| Letter frequency | How quickly the next letter comes after you hit one. 10 = straight away, 1 = about 1.35 s. Each step is 0.15 s, with a little randomness so you can't settle into a rhythm |
+| Letter frequency | How quickly the next letter comes, and how briefly it flashes. From 8 up, the next letter comes straight away; each step below 8 adds about 0.15 s. With Flash letter on, 8 shows the letter for 0.125 s, each step up halves that, and 10 shows it for a single screen refresh |
 | Focus on missed letters | How hard the game leans on letters you get wrong (0 = pure random) |
-| Flash letter | When ticked, the letter shows for a quarter of a second and then disappears. The timer stays until you press the key |
+| Flash letter | When ticked, the letter disappears after a moment (how long depends on Letter frequency). The timer stays until you press the key |
 
 ## Code layout
 
 ```
 game/
   core.h / core.c        game rules: letter weighting, picking, round stats (no raylib)
-  main.c                 window, input, drawing, settings panel
+  main.c                 window, input, drawing, settings panel, browser support
+  font_data.h            embedded font for browsers / machines without Arial
+  fonts/OFL.txt          that font's licence
+  web/shell.html         the page the browser version runs in
   tests/core_tests.c     tests for core.c
 ```
 
@@ -68,6 +82,6 @@ game/
 
 ## Notes
 
-- Arial is loaded from the system (`/System/Library/Fonts/Supplemental/Arial.ttf` on macOS, `C:/Windows/Fonts/arial.ttf` on Windows). If it isn't found, raylib's built-in font is used instead.
-- Timing is sampled once per frame. The game targets 240 FPS, so times are accurate to about 4 ms.
+- Arial is loaded from the system (`/System/Library/Fonts/Supplemental/Arial.ttf` on macOS, `C:/Windows/Fonts/arial.ttf` on Windows). If it isn't found, and always in a browser, the embedded BatakSans font is used instead (Liberation Sans cut down to ASCII, same letter shapes and widths as Arial).
+- On desktop, keys are read once per frame at 240 FPS, so times are accurate to about 4 ms. In a browser, each key press is timestamped the moment it happens, so times are accurate to about 1 ms even though the screen only redraws at 60 Hz.
 - Keys are read by physical position (US/UK QWERTY).

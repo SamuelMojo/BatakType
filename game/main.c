@@ -7,10 +7,17 @@
  * Plain look: black background, white Arial text.
  *
  * C11 + raylib 5.5. The rules live in core.c (no raylib). This file is the
- * window, the input and the drawing.
+ * window, the input and the drawing. Builds natively, or for the browser
+ * with Emscripten (see the README).
  */
 #include "core.h"
+#include "font_data.h"
 #include "raylib.h"
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#include <emscripten/html5.h>
+#endif
 
 #include <math.h>
 #include <stdbool.h>
@@ -30,8 +37,10 @@
 #define TOP_H 70.0f
 #define LETTER_SIZE 160.0f     /* letter height in px */
 #define SHAKE_PX 14.0f         /* how far the timer shakes on a wrong key */
-#define FLASH_TIME 0.25        /* flash mode: how long the letter stays up */
-#define GAP_PER_STEP 0.15      /* seconds of gap per step below max frequency */
+#define NO_GAP_LEVEL 8         /* frequency from which letters follow instantly */
+#define GAP_PER_STEP 0.15      /* seconds of gap per frequency step below that */
+#define FLASH_AT_8 0.125       /* flash mode: letter time at frequency 8 */
+#define FLASH_MAX 1.0          /* flash mode: longest the letter stays up */
 
 static const Color MISS_RED = {255, 40, 40, 255};
 
@@ -42,9 +51,9 @@ static const Color MISS_RED = {255, 40, 40, 255};
 typedef struct {
     float roundSeconds;
     float scatterAfter;
-    float frequency; /* 1 (slow) .. 10 (next letter straight away) */
+    float frequency; /* 1 (slow) .. 10 (fastest): gap, and flash-mode letter time */
     float adaptPercent;
-    bool flashLetter; /* letter vanishes after FLASH_TIME, timer keeps going */
+    bool flashLetter; /* letter vanishes after flash_time(), timer keeps going */
 } Settings;
 
 /* "Random positions after" at its maximum means never. */
@@ -61,13 +70,13 @@ typedef struct {
 
 #define PRESET_COUNT 3
 static const Preset kPresets[PRESET_COUNT] = {
-    {"Easy", SCATTER_NEVER, 5.0f, 40.0f, false},
-    {"Medium", 10.0f, 7.0f, 60.0f, false},
-    {"Hard", 0.0f, 10.0f, 80.0f, true},
+    {"Easy", SCATTER_NEVER, 2.0f, 40.0f, false},
+    {"Medium", 10.0f, 5.0f, 60.0f, false},
+    {"Hard", 0.0f, 8.0f, 80.0f, true},
 };
 
 /* Start on Medium with a 60 second round. */
-static const Settings kDefaultSettings = {60.0f, 10.0f, 7.0f, 60.0f, false};
+static const Settings kDefaultSettings = {60.0f, 10.0f, 5.0f, 60.0f, false};
 
 typedef struct {
     const char *label;
@@ -133,6 +142,7 @@ typedef struct {
     bool scattered; /* letter is at a random spot instead of the centre */
     Vector2 pos;    /* random spot, normalised inside the play area */
     int keysDone;
+    int letterFrames; /* frames the current letter has been drawn for */
 
     Split splits[MAX_SPLITS];
     int splitCount;
@@ -169,13 +179,33 @@ static void set_paused(bool p) {
 /* Font and text                                                             */
 /* ------------------------------------------------------------------------ */
 
-static Font gBig;   /* the letter and the timer */
-static Font gSmall; /* everything else */
-static bool gOwnBig = false, gOwnSmall = false;
+/* Real screen pixels per layout pixel. 1 on desktop. In a browser it's the
+ * page's devicePixelRatio (2 on a Retina Mac): the canvas is made that many
+ * times bigger and everything is drawn scaled up, so it stays sharp instead
+ * of being stretched by the browser. Updated every frame. */
+static float gScale = 1.0f;
 
-/* Arial ships with macOS and Windows; this looks in the usual places and
- * falls back to raylib's built-in font if it isn't found. */
-static Font load_arial(int size, bool *owned) {
+/* Snap a layout coordinate to a whole screen pixel, so text isn't smeared
+ * across two pixels. */
+static float snap(float v) { return roundf(v * gScale) / gScale; }
+
+/* Window size and mouse position in layout pixels (see gScale). */
+static float ui_w(void) { return (float)GetScreenWidth() / gScale; }
+static float ui_h(void) { return (float)GetScreenHeight() / gScale; }
+static Vector2 ui_mouse(void) {
+    Vector2 m = GetMousePosition();
+    return (Vector2){m.x / gScale, m.y / gScale};
+}
+
+/* The font file: Arial from the system if it's there, otherwise the embedded
+ * BatakSans (same letter shapes and widths as Arial). A browser can't read
+ * system fonts, so the web version always uses BatakSans. */
+static const unsigned char *gFontData = kBatakSansTTF;
+static int gFontDataSize = (int)sizeof kBatakSansTTF;
+static unsigned char *gArialData = NULL;
+
+static void find_font_data(void) {
+#ifndef __EMSCRIPTEN__
     const char *paths[] = {
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/Library/Fonts/Arial.ttf",
@@ -185,19 +215,59 @@ static Font load_arial(int size, bool *owned) {
     };
     for (size_t i = 0; i < sizeof paths / sizeof paths[0]; i++) {
         if (!FileExists(paths[i])) continue;
-        Font f = LoadFontEx(paths[i], size, NULL, 0);
-        if (f.texture.id != 0) {
-            GenTextureMipmaps(&f.texture);
-            SetTextureFilter(f.texture, TEXTURE_FILTER_TRILINEAR);
-            *owned = true;
-            return f;
+        int n = 0;
+        unsigned char *d = LoadFileData(paths[i], &n);
+        if (d != NULL && n > 0) {
+            gArialData = d;
+            gFontData = d;
+            gFontDataSize = n;
+            return;
         }
+        UnloadFileData(d);
     }
-    *owned = false;
-    return GetFontDefault();
+#endif
 }
 
-static Font font_for(float size) { return size >= 48.0f ? gBig : gSmall; }
+/* Each text size gets its own font, rendered at exactly the number of screen
+ * pixels it will cover. Every glyph pixel then lands on one screen pixel:
+ * nothing is stretched or squashed, so text stays crisp. Fonts are made the
+ * first time a size is used and then kept. */
+#define FONT_CACHE_MAX 24
+typedef struct {
+    int px;
+    Font font;
+} CachedFont;
+static CachedFont gFonts[FONT_CACHE_MAX];
+static int gFontCount = 0;
+
+static void unload_fonts(void) {
+    for (int i = 0; i < gFontCount; i++) UnloadFont(gFonts[i].font);
+    gFontCount = 0;
+}
+
+static Font font_for(float size) {
+    int px = (int)lroundf(size * gScale);
+    if (px < 1) px = 1;
+    for (int i = 0; i < gFontCount; i++) {
+        if (gFonts[i].px == px) return gFonts[i].font;
+    }
+    if (gFontCount == FONT_CACHE_MAX) unload_fonts();
+
+    /* Only the letter and the countdown are drawn huge: giving those sizes
+     * just A-Z and 0-9 keeps their font images small. */
+    int bigSet[36];
+    int *codepoints = NULL, count = 0;
+    if (size >= 100.0f) {
+        for (int i = 0; i < 26; i++) bigSet[count++] = 'A' + i;
+        for (int i = 0; i < 10; i++) bigSet[count++] = '0' + i;
+        codepoints = bigSet;
+    }
+    Font f = LoadFontFromMemory(".ttf", gFontData, gFontDataSize, px, codepoints, count);
+    if (f.texture.id == 0) return GetFontDefault();
+    SetTextureFilter(f.texture, TEXTURE_FILTER_BILINEAR);
+    gFonts[gFontCount++] = (CachedFont){px, f};
+    return f;
+}
 
 typedef enum { AL_LEFT, AL_CENTER, AL_RIGHT } Align;
 
@@ -205,21 +275,27 @@ static void text(const char *s, float x, float y, float size, Color c, Align al)
     Font f = font_for(size);
     Vector2 m = MeasureTextEx(f, s, size, 0);
     float dx = (al == AL_CENTER) ? m.x * 0.5f : (al == AL_RIGHT ? m.x : 0.0f);
-    DrawTextEx(f, s, (Vector2){roundf(x - dx), roundf(y)}, size, 0, c);
+    DrawTextEx(f, s, (Vector2){snap(x - dx), snap(y)}, size, 0, c);
 }
 
 /* Centred on a point, both axes. */
 static void text_mid(const char *s, Vector2 c, float size, Color col) {
     Font f = font_for(size);
     Vector2 m = MeasureTextEx(f, s, size, 0);
-    DrawTextEx(f, s, (Vector2){c.x - m.x * 0.5f, c.y - m.y * 0.5f}, size, 0, col);
+    DrawTextEx(f, s, (Vector2){snap(c.x - m.x * 0.5f), snap(c.y - m.y * 0.5f)}, size, 0,
+               col);
 }
+
+/* True for one frame after a left click. Set at the top of frame(): in a
+ * browser a quick trackpad tap can go down and up between two frames, so
+ * raylib alone would miss it; the web build records clicks as they happen. */
+static bool gClicked = false;
 
 /* Outlined text button, filled white when hovered or selected.
  * hovered == NULL means drawn but not clickable. */
 static bool button_sel(Rectangle r, const char *label, bool *hovered,
                        bool selected) {
-    bool hot = hovered != NULL && CheckCollisionPointRec(GetMousePosition(), r);
+    bool hot = hovered != NULL && CheckCollisionPointRec(ui_mouse(), r);
     if (hot) *hovered = true;
     if (hot || selected) {
         DrawRectangleRec(r, WHITE);
@@ -228,7 +304,7 @@ static bool button_sel(Rectangle r, const char *label, bool *hovered,
     }
     text_mid(label, (Vector2){r.x + r.width / 2, r.y + r.height / 2}, 18,
              (hot || selected) ? BLACK : WHITE);
-    return hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    return hot && gClicked;
 }
 
 static bool button(Rectangle r, const char *label, bool *hovered) {
@@ -248,7 +324,7 @@ static double rand01(void) {
 }
 
 static Rectangle play_rect(void) {
-    float w = (float)GetScreenWidth(), h = (float)GetScreenHeight();
+    float w = ui_w(), h = ui_h();
     return (Rectangle){SIDE_W, TOP_H, w - SIDE_W, h - TOP_H};
 }
 
@@ -259,7 +335,7 @@ static Vector2 to_screen(Rectangle P, Vector2 norm) {
 /* Centred horizontally on the whole window (like the title), yFrac of the
  * way down the area below the top line. */
 static Vector2 screen_center(Rectangle P, float yFrac) {
-    return (Vector2){(float)GetScreenWidth() * 0.5f, P.y + P.height * yFrac};
+    return (Vector2){ui_w() * 0.5f, P.y + P.height * yFrac};
 }
 
 static Vector2 letter_pos(Rectangle P) {
@@ -267,7 +343,7 @@ static Vector2 letter_pos(Rectangle P) {
 }
 
 static Vector2 gear_center(void) {
-    return (Vector2){(float)GetScreenWidth() - 40.0f, 38.0f};
+    return (Vector2){ui_w() - 40.0f, 38.0f};
 }
 
 /* A random spot for the letter that leaves room for the timer underneath
@@ -319,11 +395,26 @@ static void finish_round(void) {
 }
 
 /* Pause before the next letter, from the Letter frequency slider:
- * 10 = straight away, each step down adds GAP_PER_STEP seconds (1 = ~1.35 s).
- * A little randomness (+/-30%) stops you settling into a rhythm. */
+ * 8 and above = straight away, each step below 8 adds GAP_PER_STEP seconds
+ * (5 = ~0.45 s, 1 = ~1.05 s). A little randomness (+/-30%) stops you
+ * settling into a rhythm. */
 static double next_gap(void) {
-    double base = (10.0 - gSet.frequency) * GAP_PER_STEP;
-    return base * (0.7 + 0.6 * rand01());
+    double steps = NO_GAP_LEVEL - gSet.frequency;
+    if (steps < 0.0) steps = 0.0;
+    return steps * GAP_PER_STEP * (0.7 + 0.6 * rand01());
+}
+
+/* Shortest time the screen can show something: one refresh. Set in main(). */
+static double gOneRefresh = 1.0 / 60.0;
+
+/* Flash mode: how long the letter stays up, from the same slider.
+ * 8 = 0.125 s; each step up halves it, each step down doubles it (up to 1 s).
+ * 10 = as short as possible: a single screen refresh. */
+static double flash_time(void) {
+    int f = (int)gSet.frequency;
+    if (f >= 10) return gOneRefresh;
+    double t = FLASH_AT_8 * pow(2.0, (double)(NO_GAP_LEVEL - f));
+    return t < FLASH_MAX ? t : FLASH_MAX;
 }
 
 static void show_next_letter(double now, Rectangle P) {
@@ -338,6 +429,7 @@ static void show_next_letter(double now, Rectangle P) {
     g.live = true;
     g.shownAt = now;
     g.misses = 0;
+    g.letterFrames = 0;
     g.shakeUntil = -1.0;
 }
 
@@ -346,6 +438,7 @@ static void on_key(char c, double now) {
 
     if (c == (char)('A' + g.letter)) {
         double t = now - g.shownAt;
+        if (t < 0.0) t = 0.0;
         if (g.splitCount < MAX_SPLITS) {
             g.splits[g.splitCount++] = (Split){c, t, g.misses};
         }
@@ -388,7 +481,7 @@ static void update_game(double now, Rectangle P) {
 /* ------------------------------------------------------------------------ */
 
 static void draw_times_list(void) {
-    float h = (float)GetScreenHeight();
+    float h = ui_h();
     text("Times", 24, 24, 22, WHITE, AL_LEFT);
 
     const float rowH = 24.0f, top = 64.0f, footer = 90.0f;
@@ -442,7 +535,7 @@ static void draw_gear(Vector2 c, float r) {
 
 /* The menu is centred on the whole window, not just the play area. */
 static void draw_menu(bool *hover) {
-    Vector2 c = {(float)GetScreenWidth() * 0.5f, (float)GetScreenHeight() * 0.45f};
+    Vector2 c = {ui_w() * 0.5f, ui_h() * 0.45f};
     text_mid("BatakType", (Vector2){c.x, c.y - 60}, 64, WHITE);
     text_mid("A letter appears. Press that key as fast as you can.",
              (Vector2){c.x, c.y + 10}, 20, WHITE);
@@ -463,11 +556,13 @@ static void draw_playing(Rectangle P, double now) {
     Vector2 c = letter_pos(P);
     double el = now - g.shownAt;
 
-    /* flash mode: the letter only shows briefly, the timer stays */
-    if (!gSet.flashLetter || el < FLASH_TIME) {
+    /* flash mode: the letter only shows briefly, the timer stays. It's
+     * always drawn on its first frame, however short the flash time. */
+    if (!gSet.flashLetter || el < flash_time() || g.letterFrames == 0) {
         char s[2] = {(char)('A' + g.letter), 0};
         text_mid(s, c, LETTER_SIZE, WHITE);
     }
+    g.letterFrames++;
 
     /* timer under the letter: red after a wrong key, shakes for a moment */
     Vector2 tp = {c.x, c.y + LETTER_SIZE * 0.5f + 40};
@@ -533,7 +628,7 @@ static void draw_results(Rectangle P, bool *hover) {
 
 static Rectangle settings_rect(void) {
     float h = SLIDERS_Y + SLIDER_COUNT * SET_ROW + CHECK_ROW + 80.0f;
-    return (Rectangle){(float)GetScreenWidth() - SET_W - 20, 70, SET_W, h};
+    return (Rectangle){ui_w() - SET_W - 20, 70, SET_W, h};
 }
 
 static Rectangle slider_track(Rectangle P, int i) {
@@ -554,11 +649,11 @@ static Rectangle checkbox_row(Rectangle P) {
 /* Slider dragging. Drawing happens in draw_settings. */
 static void settings_update(bool *hover) {
     Rectangle P = settings_rect();
-    Vector2 m = GetMousePosition();
+    Vector2 m = ui_mouse();
 
     if (CheckCollisionPointRec(m, checkbox_row(P))) {
         *hover = true;
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (gClicked) {
             gSet.flashLetter = !gSet.flashLetter;
         }
     }
@@ -566,21 +661,19 @@ static void settings_update(bool *hover) {
     for (int i = 0; i < SLIDER_COUNT; i++) {
         if (CheckCollisionPointRec(m, slider_hitbox(slider_track(P, i)))) {
             *hover = true;
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) gActiveSlider = i;
+            if (gClicked) gActiveSlider = i;
         }
     }
     if (gActiveSlider < 0) return;
 
+    /* move the knob to the mouse: on the click itself, then while dragging */
     *hover = true;
-    if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-        gActiveSlider = -1;
-        return;
-    }
     Slider *s = &gSliders[gActiveSlider];
     Rectangle tr = slider_track(P, gActiveSlider);
     float t = clampf((m.x - tr.x) / tr.width, 0.0f, 1.0f);
     float v = roundf((s->min + t * (s->max - s->min)) / s->step) * s->step;
     *s->value = clampf(v, s->min, s->max);
+    if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) gActiveSlider = -1;
 }
 
 static void toggle_settings(void) {
@@ -645,19 +738,174 @@ static void draw_settings(bool *hover) {
 }
 
 /* ------------------------------------------------------------------------ */
+/* Browser support                                                           */
+/* ------------------------------------------------------------------------ */
+
+#ifdef __EMSCRIPTEN__
+/* In a browser the game only redraws at the screen's refresh rate (usually
+ * 60 Hz), so reading keys once per frame would round every reaction time to
+ * the nearest ~17 ms. Instead we listen for key presses directly and note
+ * the exact moment each one happened, then hand them to the game with that
+ * timestamp. Only the first press counts: held-down repeats are ignored. */
+typedef struct {
+    char letter;
+    double ms; /* emscripten_get_now() at the moment of the key press */
+} WebKey;
+
+#define WEB_KEY_MAX 64
+static WebKey gWebKeys[WEB_KEY_MAX];
+static int gWebKeyCount = 0;
+
+static EM_BOOL on_web_keydown(int type, const EmscriptenKeyboardEvent *e,
+                              void *user) {
+    (void)type;
+    (void)user;
+    /* e->code is the physical key ("KeyA".."KeyZ"), like raylib's key codes */
+    bool letter = strlen(e->code) == 4 && strncmp(e->code, "Key", 3) == 0 &&
+                  e->code[3] >= 'A' && e->code[3] <= 'Z';
+    if (letter && !e->repeat && gWebKeyCount < WEB_KEY_MAX) {
+        gWebKeys[gWebKeyCount++] = (WebKey){e->code[3], emscripten_get_now()};
+    }
+    return EM_FALSE; /* don't swallow it: raylib still sees every key */
+}
+
+static bool gWebClick = false;
+
+static EM_BOOL on_web_mousedown(int type, const EmscriptenMouseEvent *e,
+                                void *user) {
+    (void)type;
+    (void)user;
+    if (e->button == 0) gWebClick = true;
+    return EM_FALSE;
+}
+
+/* Keep the canvas covering the browser window, with one canvas pixel per
+ * real screen pixel (the page's CSS keeps its on-screen size). */
+static void fit_canvas_to_page(void) {
+    double dpr = emscripten_get_device_pixel_ratio();
+    gScale = (float)(dpr >= 1.0 && dpr <= 4.0 ? dpr : 1.0);
+    double w = 0, h = 0;
+    emscripten_get_element_css_size("#canvas", &w, &h);
+    int pw = (int)lround(w * gScale), ph = (int)lround(h * gScale);
+    if (pw >= 1 && ph >= 1 && (pw != GetScreenWidth() || ph != GetScreenHeight())) {
+        SetWindowSize(pw, ph);
+    }
+}
+#endif
+
+/* ------------------------------------------------------------------------ */
 /* Main                                                                      */
 /* ------------------------------------------------------------------------ */
+
+/* One frame: input, update, draw. Called in a loop on desktop, and by the
+ * browser once per screen refresh on the web. */
+static void frame(void) {
+#ifdef __EMSCRIPTEN__
+    fit_canvas_to_page();
+    gClicked = IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || gWebClick;
+    gWebClick = false;
+#else
+    gClicked = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+#endif
+    Rectangle P = play_rect();
+    double now = game_clock();
+    bool hover = false;
+    /* If settings were open at the start of this frame, the click that
+     * closes them must not also press a button underneath. */
+    bool uiBlocked = gSettingsOpen;
+
+    /* ---- input ---- */
+    Vector2 gc = gear_center();
+    bool gearHot = CheckCollisionPointCircle(ui_mouse(), gc, 24);
+    if (gearHot) hover = true;
+    if (gearHot && gClicked) {
+        toggle_settings();
+    } else if (gSettingsOpen && gClicked &&
+               !CheckCollisionPointRec(ui_mouse(), settings_rect())) {
+        toggle_settings(); /* click outside closes */
+    }
+
+#ifdef __EMSCRIPTEN__
+    /* letters, with the exact time each key went down (see on_web_keydown) */
+    double pageToRaylib = emscripten_get_now() / 1000.0 - GetTime();
+    for (int i = 0; i < gWebKeyCount; i++) {
+        if (gSettingsOpen || g.state != ST_PLAYING) continue;
+        double t = gWebKeys[i].ms / 1000.0 - pageToRaylib - gPausedTotal;
+        on_key(gWebKeys[i].letter, t);
+    }
+    gWebKeyCount = 0;
+    const bool lettersFromFrame = false;
+#else
+    const bool lettersFromFrame = true;
+#endif
+
+    /* raylib's key queue only reports the first press, so holding a key
+     * down can't rack up misses. */
+    int key;
+    while ((key = GetKeyPressed()) != 0) {
+        if (key == KEY_ESCAPE) {
+            if (gSettingsOpen) {
+                toggle_settings();
+            } else if (g.state != ST_MENU) {
+                g.state = ST_MENU;
+                g.live = false;
+            }
+            continue;
+        }
+        if (gSettingsOpen) continue;
+        if (key >= KEY_A && key <= KEY_Z && g.state == ST_PLAYING) {
+            if (lettersFromFrame) on_key((char)('A' + (key - KEY_A)), now);
+        } else if ((key == KEY_SPACE || key == KEY_ENTER) &&
+                   (g.state == ST_MENU || g.state == ST_RESULTS)) {
+            start_round();
+        }
+    }
+
+    if (gSettingsOpen) settings_update(&hover);
+
+    /* ---- update ---- */
+    now = game_clock();
+    if (!gSettingsOpen) update_game(now, P);
+
+    /* ---- draw ---- */
+    BeginDrawing();
+    ClearBackground(BLACK);
+    /* draw in layout pixels; the camera scales them up to screen pixels */
+    Camera2D cam = {{0, 0}, {0, 0}, 0.0f, gScale};
+    BeginMode2D(cam);
+
+    bool *playHover = (uiBlocked || gSettingsOpen) ? NULL : &hover;
+    switch (g.state) {
+    case ST_MENU: draw_menu(playHover); break;
+    case ST_COUNTDOWN: draw_countdown(P, now); break;
+    case ST_PLAYING: draw_playing(P, now); break;
+    case ST_RESULTS: draw_results(P, playHover); break;
+    }
+    draw_times_list();
+    draw_top(now);
+    draw_gear(gc, 15.0f);
+    if (gSettingsOpen) draw_settings(&hover);
+
+    EndMode2D();
+    EndDrawing();
+    SetMouseCursor(hover ? MOUSE_CURSOR_POINTING_HAND : MOUSE_CURSOR_DEFAULT);
+}
 
 int main(void) {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
     InitWindow(1280, 800, "BatakType");
-    SetWindowMinSize(960, 640);
     SetExitKey(KEY_NULL); /* Esc is used in-game; close with the window button */
-    SetTargetFPS(240);    /* input is sampled per frame: ~4 ms resolution */
     SetRandomSeed((unsigned int)time(NULL));
+#ifdef __EMSCRIPTEN__
+    /* the browser draws once per screen refresh, so "first frame only" is
+     * already a single refresh */
+    gOneRefresh = 0.0;
+#else
+    int hz = GetMonitorRefreshRate(GetCurrentMonitor());
+    gOneRefresh = 1.0 / (hz >= 30 ? hz : 60);
+#endif
 
-    gBig = load_arial(256, &gOwnBig);
-    gSmall = load_arial(48, &gOwnSmall);
+    find_font_data();
 
     gSet = kDefaultSettings;
     init_sliders();
@@ -666,75 +914,21 @@ int main(void) {
     g.scattered = false;
     g.prevLetter = -1;
 
+#ifdef __EMSCRIPTEN__
+    emscripten_set_keydown_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, NULL, EM_TRUE,
+                                    on_web_keydown);
+    emscripten_set_mousedown_callback("#canvas", NULL, EM_TRUE, on_web_mousedown);
+    emscripten_set_main_loop(frame, 0, 1); /* 0 = the browser's refresh rate */
+#else
+    SetWindowMinSize(960, 640);
+    SetTargetFPS(240); /* keys are read once per frame: ~4 ms resolution */
     while (!WindowShouldClose()) {
-        Rectangle P = play_rect();
-        double now = game_clock();
-        bool hover = false;
-        /* If settings were open at the start of this frame, the click that
-         * closes them must not also press a button underneath. */
-        bool uiBlocked = gSettingsOpen;
-
-        /* ---- input ---- */
-        Vector2 gc = gear_center();
-        bool gearHot = CheckCollisionPointCircle(GetMousePosition(), gc, 24);
-        if (gearHot) hover = true;
-        if (gearHot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-            toggle_settings();
-        } else if (gSettingsOpen && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-                   !CheckCollisionPointRec(GetMousePosition(), settings_rect())) {
-            toggle_settings(); /* click outside closes */
-        }
-
-        if (IsKeyPressed(KEY_ESCAPE)) {
-            if (gSettingsOpen) {
-                toggle_settings();
-            } else if (g.state != ST_MENU) {
-                g.state = ST_MENU;
-                g.live = false;
-            }
-        }
-
-        /* raylib's key queue only reports the first press, so holding a key
-         * down can't rack up misses. */
-        int key;
-        while ((key = GetKeyPressed()) != 0) {
-            if (gSettingsOpen) continue;
-            if (key >= KEY_A && key <= KEY_Z && g.state == ST_PLAYING) {
-                on_key((char)('A' + (key - KEY_A)), now);
-            } else if ((key == KEY_SPACE || key == KEY_ENTER) &&
-                       (g.state == ST_MENU || g.state == ST_RESULTS)) {
-                start_round();
-            }
-        }
-
-        if (gSettingsOpen) settings_update(&hover);
-
-        /* ---- update ---- */
-        now = game_clock();
-        if (!gSettingsOpen) update_game(now, P);
-
-        /* ---- draw ---- */
-        BeginDrawing();
-        ClearBackground(BLACK);
-
-        bool *playHover = (uiBlocked || gSettingsOpen) ? NULL : &hover;
-        switch (g.state) {
-        case ST_MENU: draw_menu(playHover); break;
-        case ST_COUNTDOWN: draw_countdown(P, now); break;
-        case ST_PLAYING: draw_playing(P, now); break;
-        case ST_RESULTS: draw_results(P, playHover); break;
-        }
-        draw_times_list();
-        draw_top(now);
-        draw_gear(gc, 15.0f);
-        if (gSettingsOpen) draw_settings(&hover);
-
-        EndDrawing();
-        SetMouseCursor(hover ? MOUSE_CURSOR_POINTING_HAND : MOUSE_CURSOR_DEFAULT);
+        frame();
     }
+#endif
 
-    if (gOwnBig) UnloadFont(gBig);
-    if (gOwnSmall) UnloadFont(gSmall);
+    unload_fonts();
+    if (gArialData != NULL) UnloadFileData(gArialData);
     CloseWindow();
     return 0;
 }
