@@ -29,7 +29,7 @@ cmake --build build-web
 open build-web/batak_type.html
 ```
 
-This makes a single self-contained `batak_type.html` (about 380 KB) that runs in any modern browser, straight from disk. See the main README for details and GitHub Pages hosting.
+This makes a single self-contained `batak_type.html` (about 380 KB) that runs in any modern browser, straight from disk. See the main README for details.
 
 ## How to play
 

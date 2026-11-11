@@ -41,7 +41,7 @@ open build-web/batak_type.html
 
 That gives you one self-contained `batak_type.html`, with the code and font inside it. It renders at your screen's full resolution, so text stays sharp on Retina displays. Double-click it, email it, or put it on any web host; no server setup needed. Add `-DBATAK_WEB_SINGLE_FILE=OFF` to the first `cmake` line to get separate `.html` + `.js` + `.wasm` files instead (a little smaller, but they must be served by a web server rather than opened from disk).
 
-**GitHub Pages:** [`.github/workflows/web.yml`](.github/workflows/web.yml) builds the web version on every push to `master` and publishes it. Turn it on once in the repo's *Settings → Pages → Source: GitHub Actions*, and the game is playable at <https://samuelmojo.github.io/BatakType/>.
+**Play it online:** <https://samuelojo.tech/projects/batak-type/>, with a write-up of the architecture and maths.
 
 ## How to play
 
@@ -189,7 +189,6 @@ game/                  the game (C11 + raylib)
   tests/core_tests.c   tests for core.c
 app/                   C++ learning version (see Docs/PLAN.md)
 Docs/                  plan, notes and screenshots
-.github/workflows/     builds the browser version and publishes it to GitHub Pages
 CMakeLists.txt         builds everything, fetches raylib
 ```
 
