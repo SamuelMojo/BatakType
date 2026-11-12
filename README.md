@@ -5,7 +5,7 @@ A Batak-board style reaction trainer for your keyboard, written in C with [rayli
 A letter appears and a timer starts. Hit that key as fast as you can. There are two modes:
 
 - **Casual:** a 60-second round. Every reaction time is listed down the side, and at the end you get your average, total time and information throughput in bits per second. Letters you keep getting wrong come up more often.
-- **Competitive:** survive as long as you can. Letters always flash, the game keeps speeding up, and one wrong key, or half a second on a letter, ends the run. Your score is how many letters you got right.
+- **Competitive:** survive as long as you can. Letters always flash, the game keeps speeding up, and one wrong key, or 0.8 seconds on a letter, ends the run. Your score is how many letters you got right.
 
 ![Menu](Docs/screenshots/menu.png)
 
@@ -19,7 +19,7 @@ A letter appears and a timer starts. Hit that key as fast as you can. There are 
 
 ### 1.01 (November 2026)
 
-- **Less time to hit each letter.** A letter left unpressed now ends the round much sooner. In Casual it's **1 second** on Easy and Medium and **half a second** on Hard; in Competitive it's always **half a second**. (It was 5 seconds everywhere.) If you've moved the sliders yourself, Hard's letter frequency or faster counts as Hard.
+- **Less time to hit each letter.** A letter left unpressed now ends the round much sooner. In Casual it's **1 second** on Easy and Medium and **0.8 seconds** on Hard; in Competitive it's always **0.8 seconds**. (It was 5 seconds everywhere.) If you've moved the sliders yourself, Hard's letter frequency or faster counts as Hard.
 - **Fullscreen button (browser version).** A new button next to the settings gear switches the game in and out of fullscreen. It's hidden on browsers that don't allow fullscreen, such as Safari on iPhone.
 
 ### 1.0 (November 2026)
@@ -93,7 +93,7 @@ Click **Casual** or **Competitive** on the menu to start, and **Play again** on 
 ### Casual
 
 - A 60-second round (change it in settings). The results headline is your **average reaction time**, with total time, best and slowest, first-try rate and throughput underneath.
-- The round ends early if one letter takes **3 wrong presses**, or isn't pressed in time: **1 second** on Easy and Medium, **half a second** on Hard.
+- The round ends early if one letter takes **3 wrong presses**, or isn't pressed in time: **1 second** on Easy and Medium, **0.8 seconds** on Hard.
 - The first time you click Casual, the settings open so you can choose a difficulty. Press **Done** and the countdown starts.
 
 ### Competitive
@@ -101,7 +101,7 @@ Click **Casual** or **Competitive** on the menu to start, and **Play again** on 
 - Starts at Letter frequency 5 and speeds up one level at **5, 12, 22, 36 and 55 seconds**, then keeps climbing more slowly until it reaches the top level for your monitor (see [the maths](Docs/MATHS.md#7-competitive-speed-schedule)).
 - Letters **always flash**, so each speed-up also means less time to read the letter.
 - **Focus on missed letters is off**, so every run is pure random and runs are comparable.
-- **One wrong key, or half a second on a letter, ends the run.** The headline is **how many letters you got right**, with the time you survived, the speed you reached and your best this session.
+- **One wrong key, or 0.8 seconds on a letter, ends the run.** The headline is **how many letters you got right**, with the time you survived, the speed you reached and your best this session.
 - Random positions follow your *Random positions after* setting.
 
 ### Settings

@@ -33,8 +33,8 @@ This makes a single self-contained `batak_type.html` (about 380 KB) that runs in
 
 ## Modes
 
-- **Casual:** 60-second round using your settings. Ends early after 3 wrong presses on one letter, or if a letter isn't pressed within 1 second (Easy, Medium) or half a second (Hard). Headline: average reaction time.
-- **Competitive:** starts at frequency 5 and keeps speeding up (after 5, 12, 22, 36, 55... s) to your monitor's top level. Letters always flash, focus on missed letters is off, and one wrong key or half a second on a letter ends the run. Headline: how many letters you got right.
+- **Casual:** 60-second round using your settings. Ends early after 3 wrong presses on one letter, or if a letter isn't pressed within 1 second (Easy, Medium) or 0.8 seconds (Hard). Headline: average reaction time.
+- **Competitive:** starts at frequency 5 and keeps speeding up (after 5, 12, 22, 36, 55... s) to your monitor's top level. Letters always flash, focus on missed letters is off, and one wrong key or 0.8 seconds on a letter ends the run. Headline: how many letters you got right.
 
 Both show throughput in bits per second (see [Docs/MATHS.md](../Docs/MATHS.md)).
 
