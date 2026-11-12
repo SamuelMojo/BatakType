@@ -48,7 +48,7 @@
 #define COUNTDOWN_STEP 1.0     /* seconds each of "3, 2, 1" stays up */
 #define FIRST_LETTER_DELAY 0.3 /* pause between the countdown and letter 1 */
 #define TIMEOUT_GENTLE 1.0     /* Casual on Easy or Medium: seconds to hit each letter */
-#define TIMEOUT_STRICT 0.5     /* Casual on Hard, and all of Competitive */
+#define TIMEOUT_STRICT 0.8     /* Casual on Hard, and all of Competitive */
 #define CASUAL_MAX_MISSES 3    /* Casual: wrong presses on ONE letter that end it */
 #define SHAKE_TIME 0.35        /* how long the timer shakes after a wrong key */
 #define SHAKE_DISTANCE 14.0f   /* how far it shakes, in pixels */
@@ -367,7 +367,7 @@ static void press_letter(char key, double now) {
 
 /* How long a letter can wait for its key before the round ends. Casual on
  * Easy or Medium gives a second; Casual on Hard and all of Competitive give
- * half a second. If you've moved the sliders yourself (no preset matches),
+ * 0.8 seconds. If you've moved the sliders yourself (no preset matches),
  * Hard's letter frequency or faster counts as Hard. */
 static double letter_timeout(void) {
     if (gGame.mode == MODE_COMPETITIVE) return TIMEOUT_STRICT;
@@ -566,7 +566,7 @@ static void draw_menu(void) {
     if (ui_button(competitive, "Competitive", false)) {
         start_round(MODE_COMPETITIVE);
     }
-    ui_text_centered("Competitive: one wrong key or half a second on a letter and "
+    ui_text_centered("Competitive: one wrong key or 0.8 s on a letter and "
                      "you're out. It keeps getting faster.",
                      (Vector2){c.x, c.y + 120}, 16, WHITE);
     ui_text("Version " VERSION, ui_width() - 24, ui_height() - 36, 16, WHITE,
