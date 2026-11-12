@@ -179,7 +179,7 @@ The early steps come quickly, and every later one asks you to hold a faster pace
 | 247 s | 14 | 0 s | 21 ms |
 | 350 s | 15 | 0 s | 16 ms (one refresh at 60 Hz) |
 
-The speed keeps climbing until it reaches the top level for your monitor, then stays there. One wrong key, or 5 seconds on a letter, ends the run, and the score is the number of letters you got right.
+The speed keeps climbing until it reaches the top level for your monitor, then stays there. One wrong key, or half a second on a letter, ends the run, and the score is the number of letters you got right.
 
 ## 8. Information throughput: bits per second
 

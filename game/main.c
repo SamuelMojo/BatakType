@@ -38,7 +38,7 @@
 #include <emscripten/html5.h>
 #endif
 
-#define VERSION "1.0"
+#define VERSION "1.01"
 
 /* ======================================================================== */
 /* 1. Numbers you can tune                                                   */
@@ -47,7 +47,8 @@
 #define MAX_SPLITS 4096        /* most letters one round can record */
 #define COUNTDOWN_STEP 1.0     /* seconds each of "3, 2, 1" stays up */
 #define FIRST_LETTER_DELAY 0.3 /* pause between the countdown and letter 1 */
-#define LETTER_TIMEOUT 5.0     /* a letter ignored this long ends the round */
+#define TIMEOUT_GENTLE 1.0     /* Casual on Easy or Medium: seconds to hit each letter */
+#define TIMEOUT_STRICT 0.5     /* Casual on Hard, and all of Competitive */
 #define CASUAL_MAX_MISSES 3    /* Casual: wrong presses on ONE letter that end it */
 #define SHAKE_TIME 0.35        /* how long the timer shakes after a wrong key */
 #define SHAKE_DISTANCE 14.0f   /* how far it shakes, in pixels */
@@ -364,6 +365,18 @@ static void press_letter(char key, double now) {
     gGame.nextLetterAt = now + gap_seconds(speed_level(now), random01());
 }
 
+/* How long a letter can wait for its key before the round ends. Casual on
+ * Easy or Medium gives a second; Casual on Hard and all of Competitive give
+ * half a second. If you've moved the sliders yourself (no preset matches),
+ * Hard's letter frequency or faster counts as Hard. */
+static double letter_timeout(void) {
+    if (gGame.mode == MODE_COMPETITIVE) return TIMEOUT_STRICT;
+    int preset = current_preset();
+    bool hard = (preset >= 0) ? (preset == PRESET_COUNT - 1)
+                              : (gSet.frequency >= kPresets[PRESET_COUNT - 1].frequency);
+    return hard ? TIMEOUT_STRICT : TIMEOUT_GENTLE;
+}
+
 /* Moves the round along. Called once per frame while settings are closed. */
 static void update_round(double now) {
     if (gGame.screen == SCREEN_COUNTDOWN) {
@@ -381,12 +394,13 @@ static void update_round(double now) {
         finish_round(now, "");
         return;
     }
-    /* Both modes: leaving a letter for 5 seconds ends the round. */
-    if (gGame.live && now - gGame.shownAt >= LETTER_TIMEOUT) {
-        finish_round(now, TextFormat("%s: %c went %.0f seconds without a press",
+    /* Both modes: a letter left too long ends the round (see letter_timeout). */
+    double timeout = letter_timeout();
+    if (gGame.live && now - gGame.shownAt >= timeout) {
+        finish_round(now, TextFormat("%s: %c wasn't pressed within %.1f s",
                                      gGame.mode == MODE_COMPETITIVE ? "Too slow"
                                                                     : "Ended early",
-                                     'A' + gGame.letter, LETTER_TIMEOUT));
+                                     'A' + gGame.letter, timeout));
         return;
     }
     if (!gGame.live && now >= gGame.nextLetterAt) {
@@ -467,6 +481,74 @@ static void draw_gear(void) {
     DrawCircleV(c, r * 0.34f, BLACK); /* ...and a black dot makes the hole. */
 }
 
+#ifdef __EMSCRIPTEN__
+/* Browser only: a fullscreen button just left of the gear. A browser only
+ * allows fullscreen in direct response to a click, so the switch happens
+ * inside the click event itself (on_web_fullscreen_click), not in frame(). */
+EM_JS(int, web_fullscreen_supported, (void), {
+    return (document.fullscreenEnabled || document.webkitFullscreenEnabled) ? 1 : 0;
+})
+EM_JS(int, web_is_fullscreen, (void), {
+    return (document.fullscreenElement || document.webkitFullscreenElement) ? 1 : 0;
+})
+EM_JS(void, web_toggle_fullscreen, (void), {
+    var d = document, page = d.documentElement;
+    if (d.fullscreenElement || d.webkitFullscreenElement) {
+        (d.exitFullscreen || d.webkitExitFullscreen).call(d);
+    } else {
+        var request = page.requestFullscreen || page.webkitRequestFullscreen;
+        if (request) {
+            var result = request.call(page);
+            if (result && result.catch) result.catch(function () {});
+        }
+    }
+})
+
+static bool gFullscreenSupported = false; /* false on e.g. iPhone Safari */
+
+static Rectangle fullscreen_area(void) {
+    Rectangle gear = gear_area();
+    return (Rectangle){gear.x - gear.width - 4, gear.y, gear.width, gear.height};
+}
+
+/* Four corner brackets: pointing out to go fullscreen, in to leave it. */
+static void draw_fullscreen_button(void) {
+    if (!gFullscreenSupported) return;
+    Rectangle area = fullscreen_area();
+    ui_over(area); /* hand cursor on hover */
+    Vector2 c = {area.x + area.width / 2, area.y + area.height / 2};
+    const float half = 13.0f, arm = 8.0f, thick = 3.0f;
+    bool full = web_is_fullscreen();
+    for (int sx = -1; sx <= 1; sx += 2) {
+        for (int sy = -1; sy <= 1; sy += 2) {
+            /* The corner of each bracket, and the way its two arms point. */
+            float reach = full ? half - arm : half;
+            Vector2 corner = {c.x + sx * reach, c.y + sy * reach};
+            float dx = full ? (float)sx : (float)-sx;
+            float dy = full ? (float)sy : (float)-sy;
+            float x0 = fminf(corner.x, corner.x + dx * arm);
+            float y0 = fminf(corner.y, corner.y + dy * arm);
+            DrawRectangleRec((Rectangle){x0, corner.y - thick / 2, arm, thick}, WHITE);
+            DrawRectangleRec((Rectangle){corner.x - thick / 2, y0, thick, arm}, WHITE);
+        }
+    }
+}
+
+static EM_BOOL on_web_fullscreen_click(int type, const EmscriptenMouseEvent *event,
+                                       void *user) {
+    (void)type;
+    (void)user;
+    /* The canvas fills the page from its top-left corner, so page
+     * coordinates are the game's own coordinates. */
+    Vector2 point = {(float)event->clientX, (float)event->clientY};
+    if (event->button == 0 && gFullscreenSupported &&
+        CheckCollisionPointRec(point, fullscreen_area())) {
+        web_toggle_fullscreen();
+    }
+    return EM_FALSE; /* let the game see the click too */
+}
+#endif
+
 static void draw_menu(void) {
     Vector2 c = {ui_width() * 0.5f, ui_height() * 0.45f};
     ui_text_centered("BatakType", (Vector2){c.x, c.y - 60}, 64, WHITE);
@@ -484,7 +566,7 @@ static void draw_menu(void) {
     if (ui_button(competitive, "Competitive", false)) {
         start_round(MODE_COMPETITIVE);
     }
-    ui_text_centered("Competitive: one wrong key or 5 seconds on a letter and "
+    ui_text_centered("Competitive: one wrong key or half a second on a letter and "
                      "you're out. It keeps getting faster.",
                      (Vector2){c.x, c.y + 120}, 16, WHITE);
     ui_text("Version " VERSION, ui_width() - 24, ui_height() - 36, 16, WHITE,
@@ -820,6 +902,12 @@ static void frame(void) {
     fit_frequency_to_monitor();
 
     /* The gear opens and closes settings; clicking outside closes them. */
+#ifdef __EMSCRIPTEN__
+    /* The fullscreen button was handled in the click event; just use up
+     * the click so it doesn't also close the settings panel. */
+    if (gFullscreenSupported && ui_click_in(fullscreen_area())) {
+    } else
+#endif
     if (ui_click_in(gear_area())) {
         if (gSettingsOpen) close_settings();
         else open_settings();
@@ -846,6 +934,9 @@ static void frame(void) {
     draw_top_bar(now);
     ui_set_enabled(true);
     draw_gear();
+#ifdef __EMSCRIPTEN__
+    draw_fullscreen_button();
+#endif
     if (gSettingsOpen) settings_panel();
     ui_end_draw();
 }
@@ -860,6 +951,9 @@ int main(void) {
 #ifdef __EMSCRIPTEN__
     emscripten_set_keydown_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, NULL, EM_TRUE,
                                     on_web_keydown);
+    gFullscreenSupported = web_fullscreen_supported() != 0;
+    emscripten_set_mousedown_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, NULL, EM_TRUE,
+                                      on_web_fullscreen_click);
     /* Hand the browser our frame function; it calls it once per refresh. */
     emscripten_set_main_loop(frame, 0, 1);
 #else
