@@ -146,12 +146,49 @@ static void fit_canvas_to_page(void) {
  * frames, and raylib (which checks once per frame) would miss it. So we
  * are told about each click the moment it happens and remember it. */
 static bool sWebClick = false;
+static Vector2 sWebMouse = {0, 0}; /* see on_web_mousemove */
 static EM_BOOL on_web_mousedown(int type, const EmscriptenMouseEvent *event,
                                 void *user) {
     (void)type; /* "(void)x" just says "yes, I know I'm not using x" */
     (void)user;
     if (event->button == 0) sWebClick = true; /* 0 = left button */
-    return EM_FALSE;                          /* let raylib see it too */
+    /* Also note where, so a click with no mouse movement before it (say,
+     * the first click after the page loads) lands under the pointer. */
+    sWebMouse = (Vector2){(float)event->clientX, (float)event->clientY};
+    return EM_FALSE; /* let raylib see it too */
+}
+
+/* Browser only: where the mouse is, tracked by us rather than by raylib.
+ *
+ * Why: raylib's browser layer (Emscripten's GLFW) scales the mouse by the
+ * window size *it* last heard about. raylib's own resize handler changes
+ * the canvas without telling it, and fit_canvas_to_page only corrects that
+ * when the size it wants differs from raylib's. On a Retina Mac (pixel
+ * ratio 2) they always differ, so it always got corrected. On an ordinary
+ * PC screen (ratio 1) they match, so the mouse stayed scaled to the
+ * starting 1280 x 800 window: close enough in a small window, but in
+ * fullscreen on a wide monitor every click landed far from the pointer.
+ *
+ * The browser's clientX/clientY are page (CSS) pixels, and because the
+ * canvas fills the page from its top-left corner, those are exactly our
+ * layout pixels on every screen. */
+static EM_BOOL on_web_mousemove(int type, const EmscriptenMouseEvent *event,
+                                void *user) {
+    (void)type;
+    (void)user;
+    sWebMouse = (Vector2){(float)event->clientX, (float)event->clientY};
+    return EM_FALSE;
+}
+
+/* A tap on a touch screen moves the "mouse" to the finger. */
+static EM_BOOL on_web_touch(int type, const EmscriptenTouchEvent *event, void *user) {
+    (void)type;
+    (void)user;
+    if (event->numTouches > 0) {
+        sWebMouse = (Vector2){(float)event->touches[0].clientX,
+                              (float)event->touches[0].clientY};
+    }
+    return EM_FALSE;
 }
 #endif
 
@@ -211,6 +248,12 @@ void ui_init(void) {
     find_font();
 #ifdef __EMSCRIPTEN__
     emscripten_set_mousedown_callback("#canvas", NULL, EM_TRUE, on_web_mousedown);
+    emscripten_set_mousemove_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, NULL, EM_TRUE,
+                                      on_web_mousemove);
+    emscripten_set_touchstart_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, NULL, EM_TRUE,
+                                       on_web_touch);
+    emscripten_set_touchmove_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, NULL, EM_TRUE,
+                                      on_web_touch);
 #endif
 }
 
@@ -252,8 +295,12 @@ void ui_end_draw(void) {
 /* ------------------------------------------------------------------------ */
 
 Vector2 ui_mouse(void) {
+#ifdef __EMSCRIPTEN__
+    return sWebMouse; /* already in layout pixels: see on_web_mousemove */
+#else
     Vector2 real = GetMousePosition(); /* in real pixels */
     return (Vector2){real.x / sScale, real.y / sScale};
+#endif
 }
 
 void ui_set_enabled(bool enabled) { sEnabled = enabled; }
